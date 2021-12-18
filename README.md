@@ -1,5 +1,4 @@
-**AnswerNFTs
-**
+**AnswerNFTs**
 A simple app that allows users to mint questions, puzzles, and riddles in form of NFTs and sells it.
 
 My Journey:
