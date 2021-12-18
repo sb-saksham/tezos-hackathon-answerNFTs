@@ -1,10 +1,5 @@
-(**
-Implementation of the FA2 interface for the NFT contract supporting multiple
-types of NFTs. Each NFT type is represented by the range of token IDs - `token_def`.
- *)
-
 type token_id = nat
-
+//answer_hash type definition
 type answer_hash = bytes
 
 type transfer_destination =
@@ -55,7 +50,7 @@ type update_operator =
 [@layout:comb]
   | Add_operator of operator_param
   | Remove_operator of operator_param
-
+//storing answer hash in token metadata
 type token_metadata =
 [@layout:comb]
 {
@@ -64,36 +59,36 @@ type token_metadata =
   answer_hash : answer_hash;
 }
 
-(*
-One of the options to make token metadata discoverable is to declare
-`token_metadata : token_metadata_storage` field inside the FA2 contract storage
-*)
 type token_metadata_storage = (token_id, token_metadata) big_map
 
-(**
-Optional type to define view entry point to expose token_metadata on chain or
-as an external view
- *)
 type token_metadata_param = 
 [@layout:comb]
 {
   token_ids : token_id list;
   handler : (token_metadata list) -> unit;
 }
-
-type get_answer_hash_param = 
-[@layout:comb]
-{
-  token_id : token_id;
-  callback : (answer_hash) contract;
-}
-
+//changing minting parameters to take answer as string input
 type mint_params =
 [@layout:comb]
 {
   link_to_metadata: bytes;
   owner: address;
   answer: string;
+}
+//definition for token_shop_entrypoint which expects the answer_hash
+type buy_token_parameters = 
+[@layout:comb]
+{
+    sent_answer_hash : answer_hash;
+    recieved_answer_hash : answer_hash;
+    token_id : token_id;
+}
+
+//defining parameters for GetAnswerHash entrypoint
+type get_answer_parameters = {
+  token_id: token_id;
+  sent_answer_hash : answer_hash;
+  contract_reference : (buy_token_parameters) contract;
 }
 
 type fa2_entry_points =
@@ -102,16 +97,9 @@ type fa2_entry_points =
   | Update_operators of update_operator list
   | Mint of mint_params
   | Burn of token_id
-  | GetAnswerHash of get_answer_hash_param
+  | GetAnswerHash of get_answer_parameters
 
-(* 
- TZIP-16 contract metadata storage field type. 
- The contract storage MUST have a field
- `metadata : contract_metadata`
-*)
 type contract_metadata = (string, bytes) big_map
-
-(* FA2 hooks interface *)
 
 type transfer_destination_descriptor =
 [@layout:comb]
@@ -135,73 +123,25 @@ type transfer_descriptor_param =
   operator : address;
 }
 
-(*
-Entrypoints for sender/receiver hooks
-
-type fa2_token_receiver =
-  ...
-  | Tokens_received of transfer_descriptor_param
-
-type fa2_token_sender =
-  ...
-  | Tokens_sent of transfer_descriptor_param
-*)
-
-
-(** One of the specified `token_id`s is not defined within the FA2 contract *)
 let fa2_token_undefined = "FA2_TOKEN_UNDEFINED" 
-(** 
-A token owner does not have sufficient balance to transfer tokens from
-owner's account 
-*)
+
 let fa2_insufficient_balance = "FA2_INSUFFICIENT_BALANCE"
-(** A transfer failed because of `operator_transfer_policy == No_transfer` *)
+
 let fa2_tx_denied = "FA2_TX_DENIED"
-(** 
-A transfer failed because `operator_transfer_policy == Owner_transfer` and it is
-initiated not by the token owner 
-*)
+
 let fa2_not_owner = "FA2_NOT_OWNER"
-(**
-A transfer failed because `operator_transfer_policy == Owner_or_operator_transfer`
-and it is initiated neither by the token owner nor a permitted operator
- *)
+
 let fa2_not_operator = "FA2_NOT_OPERATOR"
-(** 
-`update_operators` entrypoint is invoked and `operator_transfer_policy` is
-`No_transfer` or `Owner_transfer`
-*)
+
 let fa2_operators_not_supported = "FA2_OPERATORS_UNSUPPORTED"
-(**
-Receiver hook is invoked and failed. This error MUST be raised by the hook
-implementation
- *)
+
 let fa2_receiver_hook_failed = "FA2_RECEIVER_HOOK_FAILED"
-(**
-Sender hook is invoked and failed. This error MUST be raised by the hook
-implementation
- *)
+
 let fa2_sender_hook_failed = "FA2_SENDER_HOOK_FAILED"
-(**
-Receiver hook is required by the permission behavior, but is not implemented by
-a receiver contract
- *)
+
 let fa2_receiver_hook_undefined = "FA2_RECEIVER_HOOK_UNDEFINED"
-(**
-Sender hook is required by the permission behavior, but is not implemented by
-a sender contract
- *)
+
 let fa2_sender_hook_undefined = "FA2_SENDER_HOOK_UNDEFINED"
-(** 
-Reference implementation of the FA2 operator storage, config API and 
-helper functions 
-*)
-
-
-(* 
-  Permission policy definition. 
-  Stored in the TZIP-16 contract metadata JSON
-*)
 
 type operator_transfer_policy =
   [@layout:comb]
@@ -231,16 +171,8 @@ type permissions_descriptor =
   custom : custom_permission_policy option;
 }
 
-(** 
-(owner, operator, token_id) -> unit
-To be part of FA2 storage to manage permitted operators
-*)
 type operator_storage = ((address * (address * token_id)), unit) big_map
 
-(** 
-  Updates operator storage using an `update_operator` command.
-  Helper function to implement `Update_operators` FA2 entrypoint
-*)
 let update_operators (update, storage : update_operator * operator_storage)
     : operator_storage =
   match update with
@@ -249,10 +181,6 @@ let update_operators (update, storage : update_operator * operator_storage)
   | Remove_operator op -> 
     Big_map.remove (op.owner, (op.operator, op.token_id)) storage
 
-(**
-Validate if operator update is performed by the token owner.
-@param updater an address that initiated the operation; usually `Tezos.sender`.
-*)
 let validate_update_operators_by_owner (update, updater : update_operator * address)
     : unit =
   let op = match update with
@@ -261,10 +189,6 @@ let validate_update_operators_by_owner (update, updater : update_operator * addr
   in
   if op.owner = updater then unit else failwith fa2_not_owner
 
-(**
-  Generic implementation of the FA2 `%update_operators` entrypoint.
-  Assumes that only the token owner can change its operators.
- *)
 let fa2_update_operators (updates, storage
     : (update_operator list) * operator_storage) : operator_storage =
   let updater = Tezos.sender in
@@ -274,16 +198,8 @@ let fa2_update_operators (updates, storage
   ) in
   List.fold process_update updates storage
 
-(** 
-  owner * operator * token_id * ops_storage -> unit
-*)
 type operator_validator = (address * address * token_id * operator_storage)-> unit
 
-(**
-Create an operator validator function based on provided operator policy.
-@param tx_policy operator_transfer_policy defining the constrains on who can transfer.
-@return (owner, operator, token_id, ops_storage) -> unit
- *)
 let make_operator_validator (tx_policy : operator_transfer_policy) : operator_validator =
   let can_owner_tx, can_operator_tx = match tx_policy with
   | No_transfer -> (failwith fa2_tx_denied : bool * bool)
@@ -293,32 +209,24 @@ let make_operator_validator (tx_policy : operator_transfer_policy) : operator_va
   (fun (owner, operator, token_id, ops_storage 
       : address * address * token_id * operator_storage) ->
     if can_owner_tx && owner = operator
-    then unit (* transfer by the owner *)
+    then unit
     else if not can_operator_tx
-    then failwith fa2_not_owner (* an operator transfer not permitted by the policy *)
+    then failwith fa2_not_owner
     else if Big_map.mem  (owner, (operator, token_id)) ops_storage
-    then unit (* the operator is permitted for the token_id *)
-    else failwith fa2_not_operator (* the operator is not permitted for the token_id *)
+    then unit 
+    else failwith fa2_not_operator 
   )
 
-(**
-Default implementation of the operator validation function.
-The default implicit `operator_transfer_policy` value is `Owner_or_operator_transfer`
- *)
 let default_operator_validator : operator_validator =
   (fun (owner, operator, token_id, ops_storage 
       : address * address * token_id * operator_storage) ->
     if owner = operator
-    then unit (* transfer by the owner *)
+    then unit 
     else if Big_map.mem (owner, (operator, token_id)) ops_storage
-    then unit (* the operator is permitted for the token_id *)
-    else failwith fa2_not_operator (* the operator is not permitted for the token_id *)
+    then unit 
+    else failwith fa2_not_operator 
   )
 
-(** 
-Validate operators for all transfers in the batch at once
-@param tx_policy operator_transfer_policy defining the constrains on who can transfer.
-*)
 let validate_operator (tx_policy, txs, ops_storage 
     : operator_transfer_policy * (transfer list) * operator_storage) : unit =
   let validator = make_operator_validator tx_policy in
@@ -328,7 +236,6 @@ let validate_operator (tx_policy, txs, ops_storage
     ) tx.txs
   ) txs
 
-(* range of nft tokens *)
 type token_def =
 [@layout:comb]
 {
@@ -357,10 +264,6 @@ type nft_token_storage = {
   admin: address;
 }
 
-(** 
-Retrieve the balances for the specified tokens and owners
-@return callback operation
-*)
 let get_balance (p, ledger : balance_of_param * ledger) : operation =
   let to_balance = fun (r : balance_of_request) ->
     let owner = Big_map.find_opt r.token_id ledger in
@@ -373,15 +276,8 @@ let get_balance (p, ledger : balance_of_param * ledger) : operation =
   let responses = List.map to_balance p.requests in
   Tezos.transaction responses 0mutez p.callback
 
-(**
-Update leger balances according to the specified transfers. Fails if any of the
-permissions or constraints are violated.
-@param txs transfers to be applied to the ledger
-@param validate_op function that validates of the tokens from the particular owner can be transferred. 
- *)
 let transfer (txs, validate_op, ops_storage, ledger, reverse_ledger
     : (transfer list) * operator_validator * operator_storage * ledger * reverse_ledger) : ledger * reverse_ledger =
-  (* process individual transfer *)
   let make_transfer = (fun ((l, rv_l), tx : (ledger * reverse_ledger) * transfer) ->
     List.fold 
       (fun ((ll, rv_ll), dst : (ledger * reverse_ledger) * transfer_destination) ->
@@ -400,7 +296,6 @@ let transfer (txs, validate_op, ops_storage, ledger, reverse_ledger
               begin
                 let _u = validate_op (o, Tezos.sender, dst.token_id, ops_storage) in
                 let new_ll = Big_map.update dst.token_id (Some dst.to_) ll in
-                (* removes token id from sender *)
                 let new_rv_ll = 
                   match Big_map.find_opt tx.from_ rv_ll with
                   | None -> (failwith fa2_insufficient_balance : reverse_ledger)
@@ -415,7 +310,6 @@ let transfer (txs, validate_op, ops_storage, ledger, reverse_ledger
                         ) tk_id_l ([]: token_id list))) 
                         rv_ll 
                 in
-                (* adds token id to recipient *)
                 let updated_rv_ll = 
                   match Big_map.find_opt dst.to_ new_rv_ll with
                   | None -> Big_map.add dst.to_ [dst.token_id] new_rv_ll
@@ -429,7 +323,6 @@ let transfer (txs, validate_op, ops_storage, ledger, reverse_ledger
     
   List.fold make_transfer txs (ledger, reverse_ledger)
 
-(** Finds a definition of the token type (token_id range) associated with the provided token id *)
 let find_token_def (tid, token_defs : token_id * (token_def set)) : token_def =
   let tdef = Set.fold (fun (res, d : (token_def option) * token_def) ->
     match res with
@@ -454,25 +347,30 @@ let get_metadata (tokens, meta : (token_id list) * token_storage )
     | None -> (failwith "NO_DATA" : token_metadata)
   ) tokens
 
-let get_answer_hash (get_ans_hash_param, token_storage : get_answer_hash_param * token_metadata_storage) : operation = 
-  let metadata_record = Big_map.find_opt get_ans_hash_param.token_id token_storage in
-  match metadata_record with
-  | None -> (failwith "NO DATA FOUND" : operation) 
-  | Some m -> Tezos.transaction m.answer_hash 0mutez get_ans_hash_param.callback  
+//Entrypoint function to return the value of answer hash
+let get_answer_hash (get_answer_param, token_storage : get_answer_parameters * token_metadata_storage) : operation = 
+  let metadata_record = 
+    match (Big_map.find_opt get_answer_param.token_id token_storage) with
+    | None -> (failwith "NO DATA FOUND") 
+    | Some m -> m in
+  let buy_params : buy_token_parameters =
+    {
+      sent_answer_hash = metadata_record.answer_hash;
+      recieved_answer_hash = get_answer_param.sent_answer_hash;
+      token_id = get_answer_param.token_id  
+    } in
+  Tezos.transaction buy_params 0mutez get_answer_param.contract_reference
 
 let mint (p, s: mint_params * nft_token_storage): nft_token_storage =
   let token_id = s.next_token_id in
-  (* Updates the ledger *)
   let new_ledger = Big_map.add token_id p.owner s.ledger in
-  (* Updates the reverse ledger *)
   let new_reverse_ledger = 
     match Big_map.find_opt p.owner s.reverse_ledger with
     | None -> Big_map.add p.owner [token_id] s.reverse_ledger
     | Some l -> Big_map.update p.owner (Some (token_id :: l)) s.reverse_ledger in
-  (* Stores the metadata *)
+  //storing answer hash in token_metadata
   let answer_hash = Crypto.sha256 (Bytes.pack (p.answer)) in 
   let new_entry = { token_id = token_id; token_info = Map.literal [("", p.link_to_metadata)] ; answer_hash = answer_hash} in
-  
   { 
       s with 
           ledger = new_ledger;
@@ -482,7 +380,6 @@ let mint (p, s: mint_params * nft_token_storage): nft_token_storage =
   }
 
 let burn (p, s: token_id * nft_token_storage): nft_token_storage =
-  (* removes token from the ledger *)
   let new_ledger: ledger =
     match Big_map.find_opt p s.ledger with
     | None -> (failwith "UNKNOWN_TOKEN": ledger)
@@ -492,7 +389,6 @@ let burn (p, s: token_id * nft_token_storage): nft_token_storage =
       else
         Big_map.remove p s.ledger
   in
-  (* removes token from the reverse ledger *)
   let new_reverse_ledger: reverse_ledger =
     match Big_map.find_opt Tezos.sender s.reverse_ledger with
     | None -> (failwith "NOT_A_USER": reverse_ledger)
@@ -531,6 +427,7 @@ let main (param, storage : fa2_entry_points * nft_token_storage)
 
   | Burn p ->
     ([]: operation list), burn (p, storage)
+  //Added the entrypoint for getting answer hash from another contract  
   | GetAnswerHash p ->
     let op = get_answer_hash (p, storage.token_metadata) in 
     [op], storage
